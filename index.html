@@ -1,0 +1,149 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>자동 출퇴근 관리</title>
+<style>
+body{font-family:Arial,sans-serif;background:#f3f6fa;margin:0;padding:20px;color:#202b3a}
+main{max-width:650px;margin:auto}
+h1{text-align:center;font-size:25px}
+.card{background:white;padding:20px;border-radius:14px;margin:15px 0;box-shadow:0 2px 8px #0001}
+label{display:block;margin:12px 0 5px;font-weight:bold}
+input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #ccd3df;border-radius:8px;font-size:16px}
+button{border:0;border-radius:9px;padding:14px;font-size:16px;cursor:pointer}
+.actions{display:flex;gap:10px;margin-top:15px}
+.actions button{flex:1;color:white}
+.start{background:#1677ed}
+.end{background:#e54848}
+.calc{background:#27364b;color:white;width:100%;margin-top:15px}
+.result{background:#edf5ff;padding:15px;border-radius:10px;line-height:2}
+small{color:#64748b}
+.record{border-bottom:1px solid #ddd;padding:12px 0}
+</style>
+</head>
+<body>
+<main>
+<h1>자동 출퇴근 관리 앱</h1>
+<div class="card">
+<h2>출퇴근 기록</h2>
+<p id="status">근무 대기 중</p>
+<div class="actions">
+<button class="start" onclick="clockIn()">출근</button>
+<button class="end" onclick="clockOut()">퇴근</button>
+</div>
+<label>출근 일시</label>
+<input type="datetime-local" id="start">
+<label>퇴근 일시</label>
+<input type="datetime-local" id="end">
+<label>휴게시간 (분)</label>
+<input type="number" id="breakTime" value="60" min="0">
+<small>휴게시간은 심야시간(22:00~06:00)이 아닌 시간에서 먼저 차감합니다.</small>
+<button class="calc" onclick="calculate()">근무시간 계산 및 저장</button>
+</div>
+<div class="card">
+<h2>근무 계산 결과</h2>
+<div class="result" id="result">계산 전입니다.</div>
+</div>
+<div class="card">
+<h2>저장된 근무 기록</h2>
+<div id="records"></div>
+</div>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const KEY="autocheck_records_v1";
+const ACTIVE="autocheck_active_v1";
+const NIGHT_START=22,NIGHT_END=6;
+
+function localInput(date){
+ const d=new Date(date.getTime()-date.getTimezoneOffset()*60000);
+ return d.toISOString().slice(0,16);
+}
+function clockIn(){
+ if(localStorage.getItem(ACTIVE)){
+  alert("이미 출근 기록이 있습니다.");return;
+ }
+ const now=new Date();
+ $("start").value=localInput(now);
+ $("end").value="";
+ localStorage.setItem(ACTIVE,now.toISOString());
+ $("status").textContent="근무 중: "+now.toLocaleString("ko-KR");
+}
+function clockOut(){
+ const active=localStorage.getItem(ACTIVE);
+ if(!active){alert("먼저 출근 버튼을 눌러주세요.");return;}
+ $("start").value=localInput(new Date(active));
+ $("end").value=localInput(new Date());
+ $("status").textContent="퇴근 기록 완료. 계산 및 저장 버튼을 눌러주세요.";
+}
+function nightMinutes(start,end){
+ let total=0;
+ let day=new Date(start);
+ day.setHours(0,0,0,0);
+ while(day<end){
+  const ns=new Date(day);
+  ns.setHours(NIGHT_START,0,0,0);
+  const ne=new Date(day);
+  ne.setDate(ne.getDate()+1);
+  ne.setHours(NIGHT_END,0,0,0);
+  total+=Math.max(0,Math.min(end,ne)-Math.max(start,ns))/60000;
+  day.setDate(day.getDate()+1);
+ }
+ return total;
+}
+function calculate(){
+ const start=new Date($("start").value);
+ const end=new Date($("end").value);
+ const rest=Number($("breakTime").value);
+ if(!$("start").value||!$("end").value||end<=start||
+ !Number.isFinite(rest)||rest<0){
+  alert("출퇴근 일시와 휴게시간을 확인해주세요.");return;
+ }
+ const gross=(end-start)/60000;
+ if(rest>gross){alert("휴게시간이 전체 근무시간보다 깁니다.");return;}
+ const night=nightMinutes(start,end);
+ const day=gross-night;
+ // 주간 시간에서 우선 차감, 부족한 경우 심야에서 차감
+ const netDay=Math.max(0,day-rest);
+ const netNight=Math.max(0,night-Math.max(0,rest-day));
+ const net=netDay+netNight;
+ const fmt=m=>{
+  const rounded=Math.round(m);
+  return Math.floor(rounded/60)+"시간 "+rounded%60+"분";
+ };
+ $("result").innerHTML=
+ "전체 근무: "+fmt(gross)+"<br>"+
+ "휴게시간: "+fmt(rest)+"<br>"+
+ "실제 근무: <b>"+fmt(net)+"</b><br>"+
+ "일반 근무: "+fmt(netDay)+"<br>"+
+ "심야 근무: <b>"+fmt(netNight)+"</b>";
+ const records=JSON.parse(localStorage.getItem(KEY)||"[]");
+ records.unshift({
+  start:$("start").value,end:$("end").value,
+  rest,gross,net,netDay,netNight
+ });
+ localStorage.setItem(KEY,JSON.stringify(records));
+ localStorage.removeItem(ACTIVE);
+ $("status").textContent="근무 기록 저장 완료";
+ showRecords();
+}
+function showRecords(){
+ const records=JSON.parse(localStorage.getItem(KEY)||"[]");
+ $("records").innerHTML=records.length?
+ records.map(r=>`<div class="record">
+ <b>${r.start.replace("T"," ")} ~ ${r.end.replace("T"," ")}</b><br>
+ 실근무 ${(r.net/60).toFixed(2)}시간 /
+ 심야 ${(r.netNight/60).toFixed(2)}시간
+ </div>`).join(""):"저장된 기록이 없습니다.";
+}
+const active=localStorage.getItem(ACTIVE);
+if(active){
+ $("start").value=localInput(new Date(active));
+ $("status").textContent="근무 중: "+new Date(active).toLocaleString("ko-KR");
+}
+showRecords();
+</script>
+</body>
+</html>
