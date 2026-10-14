@@ -12,6 +12,7 @@ h1{text-align:center;font-size:25px}
 .card{background:white;padding:20px;border-radius:14px;margin:15px 0;box-shadow:0 2px 8px #0001}
 label{display:block;margin:12px 0 5px;font-weight:bold}
 input{box-sizing:border-box;width:100%;padding:12px;border:1px solid #ccd3df;border-radius:8px;font-size:16px}
+button:disabled{opacity:.55;cursor:wait}
 button{border:0;border-radius:9px;padding:14px;font-size:16px;cursor:pointer}
 .actions{display:flex;gap:10px;margin-top:15px}
 .actions button{flex:1;color:white}
@@ -26,6 +27,18 @@ small{color:#64748b}
 <body>
 <main>
 <h1>자동 출퇴근 관리 앱</h1>
+<div class="card">
+<h2>1단계 · 고정 근무지 GPS 등록</h2>
+<p>근무지에서 아래 버튼을 눌러 현재 위치를 등록하세요. 근무지는 한 곳만 저장됩니다.</p>
+<button class="calc" id="registerWorkplace" onclick="requestLocation(true)">현재 위치를 근무지로 등록</button>
+<p id="workplaceInfo"></p>
+<h2>2단계 · 현재 위치 확인</h2>
+<button class="calc" id="checkLocation" onclick="requestLocation(false)">현재 위치와 거리 확인</button>
+<div class="result" id="locationResult" role="status" aria-live="polite">위치를 확인하지 않았습니다.</div>
+<p><small>판정 반경은 50m입니다. GPS 오차 때문에 실제 거리와 다를 수 있습니다. 정확한 위치 확인은 HTTPS(개발 시 localhost)와 위치 권한이 필요합니다.</small></p>
+<p><small>근무지 좌표는 이 브라우저의 로컬 저장소에만 저장됩니다. 브라우저 데이터 삭제 시 사라지고 다른 기기와 공유되지 않습니다.</small></p>
+<p><small>웹에서는 화면이 꺼지거나 앱이 백그라운드로 이동했을 때 자동 위치 감지를 보장할 수 없습니다. 이 단계에서는 버튼으로 위치를 확인하며 출퇴근은 기존 버튼으로 기록합니다.</small></p>
+</div>
 <div class="card">
 <h2>출퇴근 기록</h2>
 <p id="status">근무 대기 중</p>
@@ -82,6 +95,7 @@ function nightMinutes(start,end){
  let total=0;
  let day=new Date(start);
  day.setHours(0,0,0,0);
+ day.setDate(day.getDate()-1); // 출근일 새벽에 겹치는 전날 심야 구간 포함
  while(day<end){
   const ns=new Date(day);
   ns.setHours(NIGHT_START,0,0,0);
@@ -144,6 +158,70 @@ if(active){
  $("status").textContent="근무 중: "+new Date(active).toLocaleString("ko-KR");
 }
 showRecords();
+
+const WORKPLACE_KEY="autocheck_workplace_v1", RADIUS_METERS=50;
+let workplace=null, locationBusy=false;
+function validLocation(p){
+ return p && Number.isFinite(p.latitude) && Math.abs(p.latitude)<=90 &&
+ Number.isFinite(p.longitude) && Math.abs(p.longitude)<=180 &&
+ Number.isFinite(p.accuracy) && p.accuracy>=0;
+}
+function showWorkplace(){
+ $("workplaceInfo").textContent=workplace ?
+ "등록된 근무지: 위도 "+workplace.latitude.toFixed(6)+", 경도 "+workplace.longitude.toFixed(6)+
+ " · 등록 오차 약 "+Math.ceil(workplace.accuracy)+"m" : "등록된 근무지가 없습니다.";
+ $("registerWorkplace").textContent=workplace ? "현재 위치로 근무지 다시 등록" : "현재 위치를 근무지로 등록";
+}
+function distanceMeters(a,b){
+ const rad=n=>n*Math.PI/180;
+ const x=Math.sin(rad(b.latitude-a.latitude)/2)**2+
+ Math.cos(rad(a.latitude))*Math.cos(rad(b.latitude))*Math.sin(rad(b.longitude-a.longitude)/2)**2;
+ return 6371000*2*Math.atan2(Math.sqrt(Math.min(1,x)),Math.sqrt(Math.max(0,1-x)));
+}
+function locationVerdict(distance,uncertainty){
+ if(distance+uncertainty<=RADIUS_METERS)return "반경 50m 이내";
+ if(distance-uncertainty>RADIUS_METERS)return "반경 50m 밖";
+ return "판정 주의: GPS 오차가 50m 경계에 걸칩니다. 다시 확인하세요.";
+}
+function requestLocation(register){
+ if(locationBusy)return;
+ const result=$("locationResult");
+ if(!window.isSecureContext){result.textContent="위치 기능은 HTTPS 주소에서 이용해주세요. 개발 환경에서는 localhost를 사용할 수 있습니다.";return;}
+ if(!navigator.geolocation){result.textContent="이 브라우저는 위치 기능을 지원하지 않습니다.";return;}
+ if(!register&&!workplace){result.textContent="1단계에서 근무지를 먼저 등록해주세요.";return;}
+ if(register&&workplace&&!confirm("저장된 근무지 한 곳을 현재 위치로 교체할까요?"))return;
+ locationBusy=true;
+ $("registerWorkplace").disabled=$("checkLocation").disabled=true;
+ result.textContent="현재 위치를 확인 중입니다…";
+ const finish=()=>{locationBusy=false;$("registerWorkplace").disabled=$("checkLocation").disabled=false;};
+ const fail=error=>{
+ finish();
+ result.textContent=error.code===1 ? "위치 권한이 거부되었습니다. 브라우저의 사이트 설정과 기기 위치 설정에서 위치를 허용한 뒤 다시 눌러주세요." :
+ error.code===2 ? "현재 위치를 찾을 수 없습니다. 기기 위치 설정과 연결을 확인하고 야외에서 다시 시도해주세요." :
+ error.code===3 ? "위치 확인 시간이 초과되었습니다. 야외에서 다시 시도해주세요." : "위치 확인에 실패했습니다. 다시 시도해주세요.";
+ };
+ try{navigator.geolocation.getCurrentPosition(position=>{
+ finish();
+ const p={latitude:position.coords.latitude,longitude:position.coords.longitude,accuracy:position.coords.accuracy,registeredAt:new Date().toISOString()};
+ if(!validLocation(p)){result.textContent="유효한 위치 정보를 받지 못했습니다. 다시 시도해주세요.";return;}
+ if(!Number.isFinite(position.timestamp)||Math.abs(Date.now()-position.timestamp)>60000){result.textContent="오래된 위치 정보입니다. 다시 확인해주세요.";return;}
+ if(register){
+ if(p.accuracy>RADIUS_METERS){result.textContent="GPS 오차가 약 "+Math.ceil(p.accuracy)+"m로 커서 등록하지 않았습니다. 야외에서 다시 시도해주세요.";return;}
+ try{localStorage.setItem(WORKPLACE_KEY,JSON.stringify(p));}catch(e){result.textContent="근무지 저장에 실패했습니다. 브라우저 저장소 설정이나 용량을 확인해주세요.";return;}
+ workplace=p;showWorkplace();
+ result.textContent="근무지 등록 완료. 2단계의 현재 위치와 거리 확인 버튼을 눌러주세요.";return;
+ }
+ const distance=distanceMeters(workplace,p), uncertainty=workplace.accuracy+p.accuracy;
+ result.textContent="근무지까지 약 "+distance.toFixed(1)+"m · 좌표 기준 "+(distance<=RADIUS_METERS?"50m 이내":"50m 밖")+
+ " · 현재 GPS 오차 약 "+Math.ceil(p.accuracy)+"m · "+locationVerdict(distance,uncertainty)+
+ " · 확인 시각 "+new Date(position.timestamp).toLocaleTimeString("ko-KR");
+ },fail,{enableHighAccuracy:true,timeout:15000,maximumAge:0});}catch(e){fail({code:0});}
+}
+try{
+ const saved=localStorage.getItem(WORKPLACE_KEY);
+ if(saved){const p=JSON.parse(saved);if(!validLocation(p))throw new Error("invalid");workplace=p;}
+}catch(e){$("locationResult").textContent="저장된 근무지를 읽을 수 없습니다. 근무지를 다시 등록해주세요.";}
+showWorkplace();
 </script>
 </body>
 </html>
